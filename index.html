@@ -1,0 +1,540 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<title>【予備実験】操作インターフェースにおけるアラート表示の多段階色彩設計が行動系列生成に及ぼす影響の分析</title>
+<style>
+  :root { --cell-size: 70px; --gap: 14px; }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; padding: 0; height: 100%;
+    font-family: "Hiragino Kaku Gothic ProN", "Yu Gothic", sans-serif;
+    background: #444; color: #fff;
+    display: flex; align-items: center; justify-content: center;
+    user-select: none;
+  }
+  #app { width: 100%; height: 100%; display: flex; align-items: center; justify-content: center; }
+  .screen { max-width: 760px; padding: 32px; text-align: left; line-height: 1.8; }
+  .screen h1 { font-size: 22px; margin-bottom: 16px; border-bottom: 2px solid #555; padding-bottom: 8px; }
+  .screen h2 { font-size: 18px; margin-top: 16px; }
+  .screen p { font-size: 14px; margin: 8px 0; }
+  .screen ul { font-size: 14px; margin: 8px 0; padding-left: 20px; }
+  button {
+    margin-top: 20px; padding: 12px 28px; font-size: 16px;
+    border: none; border-radius: 6px; background: #2b7de9; color: #fff; cursor: pointer;
+  }
+  button:hover { background: #1f63c4; }
+  #fixation { font-size: 48px; }
+  #gridArea {
+    display: grid; grid-template-columns: repeat(5, var(--cell-size));
+    grid-template-rows: repeat(5, var(--cell-size)); gap: var(--gap);
+    padding: 24px; border: 2px solid rgba(255,255,255,0.5);
+  }
+  .cell { width: var(--cell-size); height: var(--cell-size); border-radius: 4px; cursor: pointer; }
+  #timerBar { position: fixed; top: 0; left: 0; height: 6px; background: #ff5555; width: 0%; }
+  #progress { position: fixed; bottom: 16px; right: 20px; font-size: 13px; opacity: 0.7; }
+  #consentBox { max-height: 35vh; overflow-y: auto; background: rgba(0,0,0,0.25); padding: 16px; border-radius: 6px; font-size: 13px; margin-bottom: 16px; }
+  label.check { display: block; margin-top: 12px; font-size: 14px; }
+  .input-field { margin-left: 8px; padding: 6px 8px; font-size: 14px; border-radius: 4px; border: 1px solid #777; background: #222; color: #fff; }
+  textarea { width: 100%; padding: 8px; font-size: 14px; border-radius: 4px; border: 1px solid #777; background: #222; color: #fff; }
+</style>
+</head>
+<body>
+<div id="timerBar"></div>
+<div id="progress"></div>
+<div id="app"></div>
+
+<script>
+
+  const GOOGLE_SHEET_ENDPOINT = "https://script.google.com/macros/s/AKfycbzqzpoesAvkwyVKj6u3lQUlJvtNtStLx-mLplhh3Ib_IxzSsFasYH92ZekFf0qi9Ip7ZQ/exec";
+
+/* ==============================================================
+   実験パラメータ設定
+   ============================================================== */
+   
+const PARAMS = {
+  // 色セット（鮮やかな赤系＆くすみを抑えた明度範囲）
+  HUE_DEG: 28.0,            // 赤（色相角）
+  IS_GRAYSCALE: false,
+  L_LEVELS: [35, 41, 48, 55, 62, 68, 75], // 7段階
+
+  TARGET_COUNT: 7,
+  GRID_SIZE: 5,             // 5x5マス
+  BACKGROUND_L: 50,         // 背景の明度
+
+  // 試行設計
+  PRACTICE_TRIALS: 2,       // 練習試行数（時間制限あり1回、なし1回）
+  TRIALS_PER_CONDITION: 5,  // 本番試行数（制限あり×5回 → 制限なし×5回）
+  TIME_LIMIT_SEC: 5.0,
+
+  FIXATION_MS: 1500,
+  POST_TRIAL_BLANK_MS: 800,
+};
+
+/* ==============================================================
+   CIELCh(ab) -> sRGB 変換
+   ============================================================== */
+const XN = 95.047, YN = 100.0, ZN = 108.883;
+
+function finv(t) { return (t ** 3 > 0.008856) ? t ** 3 : (t - 16 / 116) / 7.787; }
+
+function labToXyz(L, a, b) {
+  const fy = (L + 16) / 116, fx = fy + a / 500, fz = fy - b / 200;
+  return [XN * finv(fx), YN * finv(fy), ZN * finv(fz)];
+}
+
+function gammaCompand(c) {
+  return (c <= 0.0031308) ? 12.92 * c : 1.055 * Math.pow(c, 1 / 2.4) - 0.055;
+}
+
+function xyzToSrgbLinear(X, Y, Z) {
+  X /= 100; Y /= 100; Z /= 100;
+  const r = 3.2406 * X - 1.5372 * Y - 0.4986 * Z;
+  const g = -0.9689 * X + 1.8758 * Y + 0.0415 * Z;
+  const b = 0.0557 * X - 0.2040 * Y + 1.0570 * Z;
+  return [r, g, b];
+}
+
+function lchToSrgb(L, C, hDeg, tol = 1e-4) {
+  const hRad = hDeg * Math.PI / 180;
+  const a = C * Math.cos(hRad), b = C * Math.sin(hRad);
+  const [X, Y, Z] = labToXyz(L, a, b);
+  const lin = xyzToSrgbLinear(X, Y, Z);
+  if (lin.some(v => v < -tol || v > 1 + tol)) return null;
+  return lin.map(v => gammaCompand(Math.max(0, Math.min(1, v))));
+}
+
+function rgbToHex(rgb) {
+  return "#" + rgb.map(v => {
+    const n = Math.max(0, Math.min(255, Math.round(v * 255)));
+    return n.toString(16).padStart(2, "0").toUpperCase();
+  }).join("");
+}
+
+function findMaxChroma(L, hDeg) {
+  let lo = 0, hi = 150;
+  while (hi - lo > 0.1) {
+    const mid = (lo + hi) / 2;
+    if (lchToSrgb(L, mid, hDeg) !== null) lo = mid; else hi = mid;
+  }
+  return lo;
+}
+
+function buildPalette() {
+  const maxChromas = PARAMS.L_LEVELS.map(L => findMaxChroma(L, PARAMS.HUE_DEG));
+  const fixedC = Math.min(...maxChromas);
+  return PARAMS.L_LEVELS.map((L, level) => {
+    let rgb = lchToSrgb(L, fixedC, PARAMS.HUE_DEG);
+    if (!rgb) rgb = lchToSrgb(L, Math.max(0, fixedC - 0.5), PARAMS.HUE_DEG);
+    return { level, L, C: Math.round(fixedC * 10) / 10, hex: rgbToHex(rgb) };
+  });
+}
+
+function backgroundHex(L) { return rgbToHex(lchToSrgb(L, 0, 0)); }
+
+function distractorHex(bgL) {
+  const shifted = bgL <= 50 ? bgL + 22 : bgL - 22;
+  return rgbToHex(lchToSrgb(Math.max(2, Math.min(98, shifted)), 0, 0));
+}
+
+/* ==============================================================
+   実験ステート管理 & 連番採番ロジック
+   ============================================================== */
+const PALETTE = buildPalette();
+const results = [];
+let trialPlan = [];
+let currentTrialIndex = 0;
+let participantId = "";
+let screeningData = {};
+
+// 連番IDの取得・更新（ローカルストレージで自動カウントアップ）
+function getNextParticipantId() {
+  const STORAGE_KEY = "color_exp_participant_counter";
+  let count = parseInt(localStorage.getItem(STORAGE_KEY) || "0", 10);
+  count += 1;
+  localStorage.setItem(STORAGE_KEY, count);
+  return `P${String(count).padStart(3, "0")}`;
+}
+
+// 試行プラン：練習(制限あり1, なし1) → 本番(制限あり3 → 制限なし3)
+function buildFullPlan() {
+  const plan = [];
+  // 練習
+  plan.push({ isPractice: true, timeLimitOn: true });
+  plan.push({ isPractice: true, timeLimitOn: false });
+  // 本番：制限時間ありブロック
+  for (let i = 0; i < PARAMS.TRIALS_PER_CONDITION; i++) {
+    plan.push({ isPractice: false, timeLimitOn: true });
+  }
+  // 本番：制限時間なしブロック
+  for (let i = 0; i < PARAMS.TRIALS_PER_CONDITION; i++) {
+    plan.push({ isPractice: false, timeLimitOn: false });
+  }
+  return plan;
+}
+
+const app = document.getElementById("app");
+const timerBar = document.getElementById("timerBar");
+const progressEl = document.getElementById("progress");
+
+function showConsentScreen() {
+  app.innerHTML = `
+    <div class="screen">
+      <h1>【予備実験】操作インターフェースにおけるアラート表示の多段階色彩設計が行動系列生成に及ぼす影響の分析</h1>
+      <div id="consentBox">
+        <p><b>【本予備実験の目的】</b><br>
+        本実験は、画面上の色彩配置と人間の行動系列生成プロセスの関係を調べる本実験に向けた予備実験です。実験環境が正常に稼働するか、タスクの難易度や手順に不自然な点がないかを検証し、本実験のデザインを洗練させることを目的としています。</p>
+        
+        <p><b>【所要時間】</b> 約 5 〜 8 分</p>
+
+        <p><b>【参加必須環境】</b></p>
+        <ul>
+          <li><b>PC（パソコン）環境での参加が必須です。</b>（マウスまたはトラックパッドを使用してください。スマートフォン・タブレットからの参加はご遠慮ください）</li>
+          <li><b>ディスプレイの推奨設定</b>：
+            <ul>
+              <li>ナイトモードやブルーライトカット機能（Night Shift等）はオフにしてください。</li>
+              <li>モニターの明るさ（輝度）は普段お使いの標準的な設定にしてください。</li>
+              <li>可能であればブラウザを最大化/全画面表示にしてください。</li>
+              <li>周囲が極端に暗い/明るい部屋は避け、通常の室内照明の下で参加してください。</li>
+            </ul>
+          </li>
+        </ul>
+
+        <p><b>【データの取り扱い】</b><br>取得されたデータは研究の改善および学術的な統計分析のみに使用され、個人が特定されることはありません。</p>
+        
+        <p><b>【実験実施者・連絡先】</b><br>
+        実施責任者：早稲田大学人間科学部　松居研究室　羽賀琴美<br>
+        連絡先：toiro5103@akane.waseda.jp</p>
+      </div>
+
+      <label class="check">PC環境・ポインティングデバイス：
+        <select id="deviceInput" class="input-field">
+          <option value="pc_mouse">PC（マウス操作）</option>
+          <option value="pc_trackpad">PC（トラックパッド操作）</option>
+        </select>
+      </label>
+
+      <label class="check">使用PC機種・モニター情報（例: MacBook Pro 14インチ, 24インチ外付けモニタ等）：<br>
+        <input type="text" id="deviceSpecInput" class="input-field" style="width:90%; margin-top:4px;" placeholder="例: ThinkPad X1 / 外部ディスプレイなし">
+      </label>
+
+      <label class="check">視力について：
+        <select id="visionInput" class="input-field">
+          <option value="corrected_normal">矯正視力を含め問題なし（メガネ/コンタクト使用含む）</option>
+          <option value="uncorrected_now">普段は矯正しているが、今は着用していない</option>
+          <option value="uncorrected_problem">裸眼視力に問題があり、矯正していない</option>
+        </select>
+      </label>
+
+      <label class="check">色の見え方について（診断・指摘歴など）：
+        <select id="colorVisionInput" class="input-field">
+          <option value="none">特に指摘されたことはない（一般的な色覚）</option>
+          <option value="diagnosed">色覚特性について指摘・診断を受けたことがある</option>
+          <option value="unsure">わからない</option>
+        </select>
+      </label>
+
+      <label class="check" style="margin-top:16px;">
+        <input type="checkbox" id="agreeCheck" style="margin-right:8px;">上記の内容および動作環境を確認し、実験に参加します
+      </label>
+      <button id="consentBtn">課題説明へ進む</button>
+    </div>`;
+
+  document.getElementById("consentBtn").onclick = () => {
+    if (!document.getElementById("agreeCheck").checked) {
+      alert("参加同意のチェックを入れてください。");
+      return;
+    }
+
+    // 連番IDを内部的に採番
+    participantId = getNextParticipantId();
+
+    screeningData = {
+      participant: participantId,
+      device_type: document.getElementById("deviceInput").value,
+      device_spec: document.getElementById("deviceSpecInput").value,
+      vision: document.getElementById("visionInput").value,
+      color_vision: document.getElementById("colorVisionInput").value,
+      screen_width: window.screen.width,
+      screen_height: window.screen.height,
+      viewport_width: window.innerWidth,
+      viewport_height: window.innerHeight,
+      user_agent: navigator.userAgent,
+    };
+    showInstructions();
+  };
+}
+
+function showInstructions() {
+  app.innerHTML = `
+    <div class="screen">
+      <h1>課題の説明</h1>
+      <p>画面中央に5×5のマス目が表示され、そのうち <b>${PARAMS.TARGET_COUNT}個</b> にターゲットとなる色のマスが表示されます。</p>
+      <p>それらのマスを、<b>あなたが「重要そうだ」「先に対処すべきだ」と直感的に感じた順に</b>、素早くクリックしてください。迷いすぎず、直感で選択してください。クリックしたマスは背景と同じグレーに変わります。</p>
+      
+      <h2>試行の流れ</h2>
+      <ol style="font-size:14px; line-height:1.8;">
+        <li><b>練習試行（2回）</b>：操作確認のための練習を行います。</li>
+        <li><b>制限時間ありブロック（5回）</b>：上部に赤いバーで残り時間（5秒）が表示されます。時間内にできる限り判断してください。</li>
+        <li><b>制限時間なしブロック（5回）</b>：時間制限はありません。ご自身の判断順にクリックしてください。</li>
+      </ol>
+      <button id="startPracticeBtn">まずは練習を開始する</button>
+    </div>`;
+
+  document.getElementById("startPracticeBtn").onclick = () => {
+    trialPlan = buildFullPlan();
+    currentTrialIndex = 0;
+    runNextTrial();
+  };
+}
+
+function runNextTrial() {
+  timerBar.style.width = "0%";
+  if (currentTrialIndex >= trialPlan.length) { return showEnd(); }
+  
+  const cond = trialPlan[currentTrialIndex];
+  const isPractice = cond.isPractice;
+  const label = isPractice ? `【練習】` : `【本番】`;
+  const condLabel = cond.timeLimitOn ? "制限時間あり（5秒）" : "制限時間なし";
+
+  progressEl.textContent = `${label} 試行 ${currentTrialIndex + 1} / ${trialPlan.length}（${condLabel}）`;
+  
+  const bgL = PARAMS.BACKGROUND_L;
+  document.body.style.background = backgroundHex(bgL);
+
+  app.innerHTML = `<div id="fixation">+</div>`;
+  setTimeout(() => runTrial(cond, bgL), PARAMS.FIXATION_MS);
+}
+
+function runTrial(cond, bgL) {
+  const n = PARAMS.GRID_SIZE * PARAMS.GRID_SIZE;
+  const indices = [...Array(n).keys()];
+  for (let i = indices.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [indices[i], indices[j]] = [indices[j], indices[i]];
+  }
+  const targetIdx = new Set(indices.slice(0, PARAMS.TARGET_COUNT));
+  const targetOrderMap = {};
+  [...targetIdx].forEach((idx, i) => { targetOrderMap[idx] = PALETTE[i]; });
+
+  const dGray = distractorHex(bgL);
+  app.innerHTML = `<div id="gridArea"></div>`;
+  const gridArea = document.getElementById("gridArea");
+  const cellEls = [];
+
+  for (let i = 0; i < n; i++) {
+    const div = document.createElement("div");
+    div.className = "cell";
+    const isTarget = targetIdx.has(i);
+    div.style.background = isTarget ? targetOrderMap[i].hex : dGray;
+    div.dataset.index = i;
+    div.dataset.active = isTarget ? "1" : "0";
+    gridArea.appendChild(div);
+    cellEls.push(div);
+  }
+
+  const gridX = i => i % PARAMS.GRID_SIZE;
+  const gridY = i => Math.floor(i / PARAMS.GRID_SIZE);
+
+  let clickOrder = 0;
+  let lastTime = performance.now();
+  let lastClickPos = null;
+  let finished = false;
+  const trialStart = performance.now();
+
+  function cellCenter(el) {
+    const r = el.getBoundingClientRect();
+    return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
+  }
+
+  function endTrial() {
+    if (finished) return;
+    finished = true;
+    cellEls.forEach(el => el.removeEventListener("click", onClick));
+
+    // 本番データのみ集計に加える（練習データは除外）
+    if (!cond.isPractice) {
+      [...targetIdx].forEach(idx => {
+        const el = cellEls[idx];
+        if (el.dataset.active === "1") {
+          results.push({
+            participant: participantId, trial_num: currentTrialIndex + 1,
+            time_limit_condition: cond.timeLimitOn,
+            click_order: null, grid_x: gridX(idx), grid_y: gridY(idx),
+            color_level: targetOrderMap[idx].level, hex_code: targetOrderMap[idx].hex,
+            rt_ms: null, distance_px: null, timed_out: true,
+          });
+        }
+      });
+    }
+
+    // 練習終了時のアナウンス
+    if (currentTrialIndex === PARAMS.PRACTICE_TRIALS - 1) {
+      setTimeout(() => {
+        app.innerHTML = `
+          <div class="screen">
+            <h1>練習が終了しました</h1>
+            <p>ここから本番が始まります。</p>
+            <p>・前半5試行：制限時間あり（5秒）<br>・後半5試行：制限時間なし</p>
+            <button id="goMainBtn">本番を開始する</button>
+          </div>`;
+        document.getElementById("goMainBtn").onclick = () => {
+          currentTrialIndex++;
+          runNextTrial();
+        };
+      }, 500);
+      return;
+    }
+
+    setTimeout(() => { currentTrialIndex++; runNextTrial(); }, PARAMS.POST_TRIAL_BLANK_MS);
+  }
+
+  function onClick(e) {
+    const el = e.currentTarget;
+    if (el.dataset.active !== "1") return;
+    const idx = Number(el.dataset.index);
+    const now = performance.now();
+    const rt = Math.round(now - lastTime);
+    const pos = cellCenter(el);
+    let dist = null;
+    if (lastClickPos) {
+      dist = Math.round(Math.hypot(pos.x - lastClickPos.x, pos.y - lastClickPos.y) * 100) / 100;
+    }
+    clickOrder++;
+
+    if (!cond.isPractice) {
+      results.push({
+        participant: participantId, trial_num: currentTrialIndex + 1,
+        time_limit_condition: cond.timeLimitOn,
+        click_order: clickOrder, grid_x: gridX(idx), grid_y: gridY(idx),
+        color_level: targetOrderMap[idx].level, hex_code: targetOrderMap[idx].hex,
+        rt_ms: rt, distance_px: dist, timed_out: false,
+      });
+    }
+
+    el.style.background = dGray;
+    el.dataset.active = "0";
+    lastTime = now;
+    lastClickPos = pos;
+    if (clickOrder >= PARAMS.TARGET_COUNT) endTrial();
+  }
+
+  cellEls.forEach(el => el.addEventListener("click", onClick));
+
+  if (cond.timeLimitOn) {
+    const limitMs = PARAMS.TIME_LIMIT_SEC * 1000;
+    const tick = () => {
+      if (finished) return;
+      const elapsed = performance.now() - trialStart;
+      timerBar.style.width = Math.max(0, 100 - (elapsed / limitMs) * 100) + "%";
+      if (elapsed >= limitMs) { endTrial(); return; }
+      requestAnimationFrame(tick);
+    };
+    requestAnimationFrame(tick);
+  }
+}
+
+function toCsv(rows) {
+  const cols = ["participant","trial_num","time_limit_condition","click_order",
+                "grid_x","grid_y","color_level","hex_code","rt_ms","distance_px","timed_out"];
+  const lines = [cols.join(",")];
+  rows.forEach(r => lines.push(cols.map(c => r[c]).join(",")));
+  return lines.join("\n");
+}
+
+function showEnd() {
+  document.body.style.background = "#444";
+  timerBar.style.width = "0%";
+  progressEl.textContent = "";
+  showQuestionnaire();
+}
+
+function showQuestionnaire() {
+  app.innerHTML = `
+    <div class="screen" style="max-height:85vh; overflow-y:auto;">
+      <h1>事後アンケート（予備実験フィードバック）</h1>
+      <p>本実験の設計改善のため、率直なご意見をお願いいたします。</p>
+
+      <p style="margin-top:16px;"><b>1. 色の選び方・判断基準</b><br><span style="font-size:13px; color:#ccc;">（例：一番濃い赤から選んだ、明るい赤から選んだ、近くにあるものから選んだ 等）</span></p>
+      <textarea id="qStrategy" rows="2"></textarea>
+
+      <p style="margin-top:16px;"><b>2. 実験手順・画面表示で分かりにくかった点や不具合</b><br><span style="font-size:13px; color:#ccc;">（例：説明が分かりづらい、マスの色が識別しづらい、テンポが速すぎる/遅い 等）</span></p>
+      <textarea id="qImprovement" rows="3" placeholder="本実験に向けた改善点等があればご自由にご記入ください"></textarea>
+
+      <button id="submitQBtn">回答を送信して完了する</button>
+    </div>`;
+
+  document.getElementById("submitQBtn").onclick = function () {
+    var btn = document.getElementById("submitQBtn");
+    btn.disabled = true;
+    btn.textContent = "データを送信中...";
+
+    var surveyData = {
+      participant: participantId,
+      device_type: screeningData.device_type || "",
+      device_spec: screeningData.device_spec || "",
+      vision: screeningData.vision || "",
+      color_vision: screeningData.color_vision || "",
+      strategy: document.getElementById("qStrategy") ? document.getElementById("qStrategy").value : "",
+      improvement_feedback: document.getElementById("qImprovement") ? document.getElementById("qImprovement").value : "",
+      screen_width: window.screen.width,
+      screen_height: window.screen.height,
+      viewport_width: window.innerWidth,
+      viewport_height: window.innerHeight,
+      user_agent: navigator.userAgent
+    };
+
+    var payload = {
+      trials: results,
+      survey: surveyData
+    };
+
+    // GET/POST両対応のURLパラメータ送信
+    var encodedData = encodeURIComponent(JSON.stringify(payload));
+
+    fetch(GOOGLE_SHEET_ENDPOINT + "?data=" + encodedData, {
+      method: "GET",
+      mode: "no-cors"
+    }).then(function () {
+      showThankYouScreen(true);
+    }).catch(function (err) {
+      console.error("Transmission error:", err);
+      showThankYouScreen(false, payload);
+    });
+
+    // 2.5秒後に確実に画面を切り替え
+    setTimeout(function () {
+      showThankYouScreen(true);
+    }, 2500);
+  };
+}
+
+function showThankYouScreen(isSuccess, fallbackPayload = null) {
+  if (isSuccess) {
+    app.innerHTML = `
+      <div class="screen" style="text-align:center;">
+        <h1 style="border:none;">実験終了</h1>
+        <p style="font-size:16px; margin:24px 0;">データは正常に送信・記録されました。<br>ご協力ありがとうございました！</p>
+        <p style="color:#aaa; font-size:13px;">この画面は閉じていただいて構いません。</p>
+      </div>`;
+  } else {
+    // 送信エラー時の緊急バックアップボタン
+    const csvLines = ["participant,trial_num,time_limit_condition,click_order,grid_x,grid_y,color_level,hex_code,rt_ms,distance_px,timed_out"];
+    results.forEach(r => csvLines.push(Object.values(r).join(",")));
+    const csvBlob = new Blob([csvLines.join("\n")], { type: "text/csv" });
+    const csvUrl = URL.createObjectURL(csvBlob);
+
+    app.innerHTML = `
+      <div class="screen">
+        <h1 style="color:#ff5555;">自動送信に失敗しました</h1>
+        <p>ネットワークエラーまたはURL未設定のため、オンライン送信が完了しませんでした。<br>お手数ですが、以下のボタンからファイルをダウンロードして担当者へお送りください。</p>
+        <a href="${csvUrl}" download="backup_${participantId}.csv"><button>バックアップデータをダウンロード</button></a>
+      </div>`;
+  }
+}
+
+// 実験開始
+showConsentScreen();
+</script>
+</body>
+</html>
