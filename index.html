@@ -14,7 +14,15 @@
     user-select: none;
   }
   #app { width: 100%; height: 100%; display: flex; align-items: center; justify-content: center; }
-  .screen { max-width: 760px; padding: 32px; text-align: left; line-height: 1.8; }
+  
+  .screen { 
+    width: 760px; 
+    max-width: 90vw; 
+    padding: 32px; 
+    text-align: left; 
+    line-height: 1.8; 
+    box-sizing: border-box;
+  }
   .screen h1 { font-size: 22px; margin-bottom: 16px; border-bottom: 2px solid #555; padding-bottom: 8px; }
   .screen h2 { font-size: 18px; margin-top: 16px; }
   .screen p { font-size: 14px; margin: 8px 0; }
@@ -25,18 +33,47 @@
   }
   button:hover { background: #1f63c4; }
   #fixation { font-size: 48px; }
+  
+  #taskContainer {
+    width: 760px;
+    max-width: 90vw;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+  }
+  #conditionBanner {
+    font-size: 16px;
+    font-weight: bold;
+    padding: 6px 16px;
+    border-radius: 20px;
+    margin-bottom: 16px;
+    display: inline-block;
+  }
+  .banner-timelimit {
+    background: rgba(255, 85, 85, 0.25);
+    border: 1px solid #ff5555;
+    color: #ff8888;
+  }
+  .banner-notimelimit {
+    background: rgba(43, 125, 233, 0.25);
+    border: 1px solid #2b7de9;
+    color: #88bbff;
+  }
+
   #gridArea {
     display: grid; grid-template-columns: repeat(5, var(--cell-size));
     grid-template-rows: repeat(5, var(--cell-size)); gap: var(--gap);
     padding: 24px; border: 2px solid rgba(255,255,255,0.5);
+    border-radius: 8px;
   }
   .cell { width: var(--cell-size); height: var(--cell-size); border-radius: 4px; cursor: pointer; }
   #timerBar { position: fixed; top: 0; left: 0; height: 6px; background: #ff5555; width: 0%; }
-  #progress { position: fixed; bottom: 16px; right: 20px; font-size: 13px; opacity: 0.7; }
+  #progress { position: fixed; bottom: 16px; right: 20px; font-size: 13px; opacity: 0.8; }
   #consentBox { max-height: 35vh; overflow-y: auto; background: rgba(0,0,0,0.25); padding: 16px; border-radius: 6px; font-size: 13px; margin-bottom: 16px; }
   label.check { display: block; margin-top: 12px; font-size: 14px; }
   .input-field { margin-left: 8px; padding: 6px 8px; font-size: 14px; border-radius: 4px; border: 1px solid #777; background: #222; color: #fff; }
-  textarea { width: 100%; padding: 8px; font-size: 14px; border-radius: 4px; border: 1px solid #777; background: #222; color: #fff; }
+  textarea { width: 100%; padding: 8px; font-size: 14px; border-radius: 4px; border: 1px solid #777; background: #222; color: #fff; box-sizing: border-box; }
 </style>
 </head>
 <body>
@@ -45,26 +82,22 @@
 <div id="app"></div>
 
 <script>
-
-  const GOOGLE_SHEET_ENDPOINT = "https://script.google.com/macros/s/AKfycbzqzpoesAvkwyVKj6u3lQUlJvtNtStLx-mLplhh3Ib_IxzSsFasYH92ZekFf0qi9Ip7ZQ/exec";
+const GOOGLE_SHEET_ENDPOINT = "https://script.google.com/macros/s/AKfycbzqzpoesAvkwyVKj6u3lQUlJvtNtStLx-mLplhh3Ib_IxzSsFasYH92ZekFf0qi9Ip7ZQ/exec";
 
 /* ==============================================================
    実験パラメータ設定
    ============================================================== */
-   
 const PARAMS = {
-  // 色セット（鮮やかな赤系＆くすみを抑えた明度範囲）
-  HUE_DEG: 28.0,            // 赤（色相角）
+  HUE_DEG: 28.0,            
   IS_GRAYSCALE: false,
-  L_LEVELS: [35, 41, 48, 55, 62, 68, 75], // 7段階
+  L_LEVELS: [35, 41, 48, 55, 62, 68, 75], 
 
   TARGET_COUNT: 7,
-  GRID_SIZE: 5,             // 5x5マス
-  BACKGROUND_L: 50,         // 背景の明度
+  GRID_SIZE: 5,             
+  BACKGROUND_L: 50,         
 
-  // 試行設計
-  PRACTICE_TRIALS: 2,       // 練習試行数（時間制限あり1回、なし1回）
-  TRIALS_PER_CONDITION: 5,  // 本番試行数（制限あり×5回 → 制限なし×5回）
+  PRACTICE_TRIALS: 2,       
+  TRIALS_PER_CONDITION: 5,  
   TIME_LIMIT_SEC: 5.0,
 
   FIXATION_MS: 1500,
@@ -138,7 +171,7 @@ function distractorHex(bgL) {
 }
 
 /* ==============================================================
-   実験ステート管理 & 連番採番ロジック
+   実験ステート管理 & 連番採番
    ============================================================== */
 const PALETTE = buildPalette();
 const results = [];
@@ -147,7 +180,6 @@ let currentTrialIndex = 0;
 let participantId = "";
 let screeningData = {};
 
-// 連番IDの取得・更新（ローカルストレージで自動カウントアップ）
 function getNextParticipantId() {
   const STORAGE_KEY = "color_exp_participant_counter";
   let count = parseInt(localStorage.getItem(STORAGE_KEY) || "0", 10);
@@ -156,17 +188,16 @@ function getNextParticipantId() {
   return `P${String(count).padStart(3, "0")}`;
 }
 
-// 試行プラン：練習(制限あり1, なし1) → 本番(制限あり3 → 制限なし3)
 function buildFullPlan() {
   const plan = [];
-  // 練習
+  // 練習2試行（あり1回、なし1回）
   plan.push({ isPractice: true, timeLimitOn: true });
   plan.push({ isPractice: true, timeLimitOn: false });
-  // 本番：制限時間ありブロック
+  // 本番前半：制限時間あり（5試行）
   for (let i = 0; i < PARAMS.TRIALS_PER_CONDITION; i++) {
     plan.push({ isPractice: false, timeLimitOn: true });
   }
-  // 本番：制限時間なしブロック
+  // 本番後半：制限時間なし（5試行）
   for (let i = 0; i < PARAMS.TRIALS_PER_CONDITION; i++) {
     plan.push({ isPractice: false, timeLimitOn: false });
   }
@@ -203,7 +234,7 @@ function showConsentScreen() {
         <p><b>【データの取り扱い】</b><br>取得されたデータは研究の改善および学術的な統計分析のみに使用され、個人が特定されることはありません。</p>
         
         <p><b>【実験実施者・連絡先】</b><br>
-        実施責任者：早稲田大学人間科学部　松居研究室　羽賀琴美<br>
+        実施責任者：早稲田大学人間科学部 松居研究室 羽賀琴美<br>
         連絡先：toiro5103@akane.waseda.jp</p>
       </div>
 
@@ -246,7 +277,6 @@ function showConsentScreen() {
       return;
     }
 
-    // 連番IDを内部的に採番
     participantId = getNextParticipantId();
 
     screeningData = {
@@ -269,16 +299,16 @@ function showInstructions() {
   app.innerHTML = `
     <div class="screen">
       <h1>課題の説明</h1>
-      <p>画面中央に5×5のマス目が表示され、そのうち <b>${PARAMS.TARGET_COUNT}個</b> にターゲットとなる色のマスが表示されます。</p>
+      <p>画面中央に5×5のマス目が表示され、そのうち <b>${PARAMS.TARGET_COUNT}個</b> に赤色のマスが表示されます。</p>
       <p>それらのマスを、<b>あなたが「重要そうだ」「先に対処すべきだ」と直感的に感じた順に</b>、素早くクリックしてください。迷いすぎず、直感で選択してください。クリックしたマスは背景と同じグレーに変わります。</p>
       
       <h2>試行の流れ</h2>
       <ol style="font-size:14px; line-height:1.8;">
-        <li><b>練習試行（2回）</b>：操作確認のための練習を行います。</li>
-        <li><b>制限時間ありブロック（5回）</b>：上部に赤いバーで残り時間（5秒）が表示されます。時間内にできる限り判断してください。</li>
-        <li><b>制限時間なしブロック（5回）</b>：時間制限はありません。ご自身の判断順にクリックしてください。</li>
+        <li><b>練習試行（2回）</b>：操作確認のための練習（時間制限あり1回、なし1回）を行います。</li>
+        <li><b>本番ブロック1（5回）</b>：<b>【制限時間あり（5秒）】</b><br>上部に赤いバーで残り時間が表示されます。時間内に直感で判断してください。</li>
+        <li><b>本番ブロック2（5回）</b>：<b>【制限時間なし】</b><br>時間制限はありません。ご自身のペースで判断してクリックしてください。</li>
       </ol>
-      <button id="startPracticeBtn">まずは練習を開始する</button>
+      <button id="startPracticeBtn">まずは練習（2回）を開始する</button>
     </div>`;
 
   document.getElementById("startPracticeBtn").onclick = () => {
@@ -297,7 +327,7 @@ function runNextTrial() {
   const label = isPractice ? `【練習】` : `【本番】`;
   const condLabel = cond.timeLimitOn ? "制限時間あり（5秒）" : "制限時間なし";
 
-  progressEl.textContent = `${label} 試行 ${currentTrialIndex + 1} / ${trialPlan.length}（${condLabel}）`;
+  progressEl.textContent = `${label} 試行 ${currentTrialIndex + 1} / ${trialPlan.length}`;
   
   const bgL = PARAMS.BACKGROUND_L;
   document.body.style.background = backgroundHex(bgL);
@@ -318,7 +348,19 @@ function runTrial(cond, bgL) {
   [...targetIdx].forEach((idx, i) => { targetOrderMap[idx] = PALETTE[i]; });
 
   const dGray = distractorHex(bgL);
-  app.innerHTML = `<div id="gridArea"></div>`;
+
+  const bannerClass = cond.timeLimitOn ? "banner-timelimit" : "banner-notimelimit";
+  const bannerText = cond.timeLimitOn ? "⏱ 制限時間あり（残り 5 秒）" : "⏱ 制限時間なし（ご自身のペースで）";
+  const practiceNotice = cond.isPractice ? "<span style='font-size:13px; opacity:0.8; margin-left:8px;'>[練習]</span>" : "";
+
+  app.innerHTML = `
+    <div id="taskContainer">
+      <div id="conditionBanner" class="${bannerClass}">
+        ${bannerText}${practiceNotice}
+      </div>
+      <div id="gridArea"></div>
+    </div>`;
+
   const gridArea = document.getElementById("gridArea");
   const cellEls = [];
 
@@ -352,7 +394,6 @@ function runTrial(cond, bgL) {
     finished = true;
     cellEls.forEach(el => el.removeEventListener("click", onClick));
 
-    // 本番データのみ集計に加える（練習データは除外）
     if (!cond.isPractice) {
       [...targetIdx].forEach(idx => {
         const el = cellEls[idx];
@@ -368,17 +409,45 @@ function runTrial(cond, bgL) {
       });
     }
 
-    // 練習終了時のアナウンス
+    // ブレイク画面の分岐処理
+    // 1. 練習終了時（試行インデックス = 1） -> 本番前半（制限時間あり）の案内画面
     if (currentTrialIndex === PARAMS.PRACTICE_TRIALS - 1) {
       setTimeout(() => {
+        document.body.style.background = "#444";
+        timerBar.style.width = "0%";
         app.innerHTML = `
           <div class="screen">
             <h1>練習が終了しました</h1>
-            <p>ここから本番が始まります。</p>
-            <p>・前半5試行：制限時間あり（5秒）<br>・後半5試行：制限時間なし</p>
-            <button id="goMainBtn">本番を開始する</button>
+            <div style="background:rgba(255,85,85,0.15); border-left:4px solid #ff5555; padding:12px 16px; margin:20px 0; border-radius:4px;">
+              <h2 style="margin:0 0 6px 0; color:#ff8888; font-size:17px;">本番1：制限時間あり（5試行）</h2>
+              <p style="margin:0;">これからの5試行は、画面上部に赤いタイマーバーが表示されます。<br>時間内にできる限り直感で素早く選択してください。</p>
+            </div>
+            <button id="goBlock1Btn">本番1（制限時間あり）を開始する</button>
           </div>`;
-        document.getElementById("goMainBtn").onclick = () => {
+        document.getElementById("goBlock1Btn").onclick = () => {
+          currentTrialIndex++;
+          runNextTrial();
+        };
+      }, 500);
+      return;
+    }
+
+    // 2. 本番前半（制限時間あり）終了時（試行インデックス = 6） -> 本番後半（制限時間なし）の案内画面
+    const block1EndIndex = PARAMS.PRACTICE_TRIALS + PARAMS.TRIALS_PER_CONDITION - 1;
+    if (currentTrialIndex === block1EndIndex) {
+      setTimeout(() => {
+        document.body.style.background = "#444";
+        timerBar.style.width = "0%";
+        app.innerHTML = `
+          <div class="screen">
+            <h1>本番1が終了しました</h1>
+            <div style="background:rgba(43,125,233,0.15); border-left:4px solid #2b7de9; padding:12px 16px; margin:20px 0; border-radius:4px;">
+              <h2 style="margin:0 0 6px 0; color:#88bbff; font-size:17px;">本番2：制限時間なし（5試行）</h2>
+              <p style="margin:0;">ここからの5試行は時間制限がありません。あなたが重要だと感じる順に選択してください。</p>
+            </div>
+            <button id="goBlock2Btn">本番2（制限時間なし）を開始する</button>
+          </div>`;
+        document.getElementById("goBlock2Btn").onclick = () => {
           currentTrialIndex++;
           runNextTrial();
         };
@@ -434,14 +503,6 @@ function runTrial(cond, bgL) {
   }
 }
 
-function toCsv(rows) {
-  const cols = ["participant","trial_num","time_limit_condition","click_order",
-                "grid_x","grid_y","color_level","hex_code","rt_ms","distance_px","timed_out"];
-  const lines = [cols.join(",")];
-  rows.forEach(r => lines.push(cols.map(c => r[c]).join(",")));
-  return lines.join("\n");
-}
-
 function showEnd() {
   document.body.style.background = "#444";
   timerBar.style.width = "0%";
@@ -452,10 +513,10 @@ function showEnd() {
 function showQuestionnaire() {
   app.innerHTML = `
     <div class="screen" style="max-height:85vh; overflow-y:auto;">
-      <h1>事後アンケート（予備実験フィードバック）</h1>
+      <h1>事後アンケート</h1>
       <p>本実験の設計改善のため、率直なご意見をお願いいたします。</p>
 
-      <p style="margin-top:16px;"><b>1. 色の選び方・判断基準</b><br><span style="font-size:13px; color:#ccc;">（例：一番濃い赤から選んだ、明るい赤から選んだ、近くにあるものから選んだ 等）</span></p>
+      <p style="margin-top:16px;"><b>1. 色の選び方・判断基準</b><br><span style="font-size:13px; color:#ccc;">（例：一番濃い色から選んだ、明るい色から選んだ、近くにあるものから選んだ 等）</span></p>
       <textarea id="qStrategy" rows="2"></textarea>
 
       <p style="margin-top:16px;"><b>2. 実験手順・画面表示で分かりにくかった点や不具合</b><br><span style="font-size:13px; color:#ccc;">（例：説明が分かりづらい、マスの色が識別しづらい、テンポが速すぎる/遅い 等）</span></p>
@@ -489,7 +550,6 @@ function showQuestionnaire() {
       survey: surveyData
     };
 
-    // GET/POST両対応のURLパラメータ送信
     var encodedData = encodeURIComponent(JSON.stringify(payload));
 
     fetch(GOOGLE_SHEET_ENDPOINT + "?data=" + encodedData, {
@@ -502,7 +562,6 @@ function showQuestionnaire() {
       showThankYouScreen(false, payload);
     });
 
-    // 2.5秒後に確実に画面を切り替え
     setTimeout(function () {
       showThankYouScreen(true);
     }, 2500);
@@ -518,7 +577,6 @@ function showThankYouScreen(isSuccess, fallbackPayload = null) {
         <p style="color:#aaa; font-size:13px;">この画面は閉じていただいて構いません。</p>
       </div>`;
   } else {
-    // 送信エラー時の緊急バックアップボタン
     const csvLines = ["participant,trial_num,time_limit_condition,click_order,grid_x,grid_y,color_level,hex_code,rt_ms,distance_px,timed_out"];
     results.forEach(r => csvLines.push(Object.values(r).join(",")));
     const csvBlob = new Blob([csvLines.join("\n")], { type: "text/csv" });
@@ -533,7 +591,6 @@ function showThankYouScreen(isSuccess, fallbackPayload = null) {
   }
 }
 
-// 実験開始
 showConsentScreen();
 </script>
 </body>
