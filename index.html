@@ -550,6 +550,42 @@ function showQuestionnaire() {
       survey: surveyData
     };
 
+    // 制限に引っかからない Form POST 方式で送信
+    var form = document.createElement("form");
+    form.method = "POST";
+    form.action = GOOGLE_SHEET_ENDPOINT;
+    form.target = "hidden_iframe";
+
+    var input = document.createElement("input");
+    input.type = "hidden";
+    input.name = "data";
+    input.value = JSON.stringify(payload);
+    form.appendChild(input);
+
+    // 画面遷移を防ぐための不可視iframe
+    var iframe = document.getElementById("hidden_iframe");
+    if (!iframe) {
+      iframe = document.createElement("iframe");
+      iframe.id = "hidden_iframe";
+      iframe.name = "hidden_iframe";
+      iframe.style.display = "none";
+      document.body.appendChild(iframe);
+    }
+
+    document.body.appendChild(form);
+    form.submit();
+
+    // 送信完了画面への切り替え
+    setTimeout(function () {
+      showThankYouScreen(true);
+    }, 1500);
+  };
+
+    var payload = {
+      trials: results,
+      survey: surveyData
+    };
+
     var encodedData = encodeURIComponent(JSON.stringify(payload));
 
     fetch(GOOGLE_SHEET_ENDPOINT + "?data=" + encodedData, {
