@@ -190,14 +190,11 @@ function getNextParticipantId() {
 
 function buildFullPlan() {
   const plan = [];
-  // 練習2試行（あり1回、なし1回）
   plan.push({ isPractice: true, timeLimitOn: true });
   plan.push({ isPractice: true, timeLimitOn: false });
-  // 本番前半：制限時間あり（5試行）
   for (let i = 0; i < PARAMS.TRIALS_PER_CONDITION; i++) {
     plan.push({ isPractice: false, timeLimitOn: true });
   }
-  // 本番後半：制限時間なし（5試行）
   for (let i = 0; i < PARAMS.TRIALS_PER_CONDITION; i++) {
     plan.push({ isPractice: false, timeLimitOn: false });
   }
@@ -325,7 +322,6 @@ function runNextTrial() {
   const cond = trialPlan[currentTrialIndex];
   const isPractice = cond.isPractice;
   const label = isPractice ? `【練習】` : `【本番】`;
-  const condLabel = cond.timeLimitOn ? "制限時間あり（5秒）" : "制限時間なし";
 
   progressEl.textContent = `${label} 試行 ${currentTrialIndex + 1} / ${trialPlan.length}`;
   
@@ -409,8 +405,6 @@ function runTrial(cond, bgL) {
       });
     }
 
-    // ブレイク画面の分岐処理
-    // 1. 練習終了時（試行インデックス = 1） -> 本番前半（制限時間あり）の案内画面
     if (currentTrialIndex === PARAMS.PRACTICE_TRIALS - 1) {
       setTimeout(() => {
         document.body.style.background = "#444";
@@ -432,7 +426,6 @@ function runTrial(cond, bgL) {
       return;
     }
 
-    // 2. 本番前半（制限時間あり）終了時（試行インデックス = 6） -> 本番後半（制限時間なし）の案内画面
     const block1EndIndex = PARAMS.PRACTICE_TRIALS + PARAMS.TRIALS_PER_CONDITION - 1;
     if (currentTrialIndex === block1EndIndex) {
       setTimeout(() => {
@@ -526,81 +519,63 @@ function showQuestionnaire() {
     </div>`;
 
   document.getElementById("submitQBtn").onclick = function () {
-    var btn = document.getElementById("submitQBtn");
-    btn.disabled = true;
-    btn.textContent = "データを送信中...";
+    try {
+      var btn = document.getElementById("submitQBtn");
+      btn.disabled = true;
+      btn.textContent = "データを送信中...";
 
-    var surveyData = {
-      participant: participantId,
-      device_type: screeningData.device_type || "",
-      device_spec: screeningData.device_spec || "",
-      vision: screeningData.vision || "",
-      color_vision: screeningData.color_vision || "",
-      strategy: document.getElementById("qStrategy") ? document.getElementById("qStrategy").value : "",
-      improvement_feedback: document.getElementById("qImprovement") ? document.getElementById("qImprovement").value : "",
-      screen_width: window.screen.width,
-      screen_height: window.screen.height,
-      viewport_width: window.innerWidth,
-      viewport_height: window.innerHeight,
-      user_agent: navigator.userAgent
-    };
+      var surveyData = {
+        participant: participantId || "unknown",
+        device_type: screeningData.device_type || "",
+        device_spec: screeningData.device_spec || "",
+        vision: screeningData.vision || "",
+        color_vision: screeningData.color_vision || "",
+        strategy: document.getElementById("qStrategy") ? document.getElementById("qStrategy").value : "",
+        improvement_feedback: document.getElementById("qImprovement") ? document.getElementById("qImprovement").value : "",
+        screen_width: window.screen.width,
+        screen_height: window.screen.height,
+        viewport_width: window.innerWidth,
+        viewport_height: window.innerHeight,
+        user_agent: navigator.userAgent
+      };
 
-    var payload = {
-      trials: results,
-      survey: surveyData
-    };
+      var payload = {
+        trials: results,
+        survey: surveyData
+      };
 
-    // 制限に引っかからない Form POST 方式で送信
-    var form = document.createElement("form");
-    form.method = "POST";
-    form.action = GOOGLE_SHEET_ENDPOINT;
-    form.target = "hidden_iframe";
+      // 大量データでも落ちない Form POST 方式
+      var form = document.createElement("form");
+      form.method = "POST";
+      form.action = GOOGLE_SHEET_ENDPOINT;
+      form.target = "hidden_iframe";
 
-    var input = document.createElement("input");
-    input.type = "hidden";
-    input.name = "data";
-    input.value = JSON.stringify(payload);
-    form.appendChild(input);
+      var input = document.createElement("input");
+      input.type = "hidden";
+      input.name = "data";
+      input.value = JSON.stringify(payload);
+      form.appendChild(input);
 
-    // 画面遷移を防ぐための不可視iframe
-    var iframe = document.getElementById("hidden_iframe");
-    if (!iframe) {
-      iframe = document.createElement("iframe");
-      iframe.id = "hidden_iframe";
-      iframe.name = "hidden_iframe";
-      iframe.style.display = "none";
-      document.body.appendChild(iframe);
+      var iframe = document.getElementById("hidden_iframe");
+      if (!iframe) {
+        iframe = document.createElement("iframe");
+        iframe.id = "hidden_iframe";
+        iframe.name = "hidden_iframe";
+        iframe.style.display = "none";
+        document.body.appendChild(iframe);
+      }
+
+      document.body.appendChild(form);
+      form.submit();
+
+      // 完了画面へ切り替え
+      setTimeout(function () {
+        showThankYouScreen(true);
+      }, 1500);
+
+    } catch (err) {
+      alert("送信エラー:\n" + err.name + ": " + err.message);
     }
-
-    document.body.appendChild(form);
-    form.submit();
-
-    // 送信完了画面への切り替え
-    setTimeout(function () {
-      showThankYouScreen(true);
-    }, 1500);
-  };
-
-    var payload = {
-      trials: results,
-      survey: surveyData
-    };
-
-    var encodedData = encodeURIComponent(JSON.stringify(payload));
-
-    fetch(GOOGLE_SHEET_ENDPOINT + "?data=" + encodedData, {
-      method: "GET",
-      mode: "no-cors"
-    }).then(function () {
-      showThankYouScreen(true);
-    }).catch(function (err) {
-      console.error("Transmission error:", err);
-      showThankYouScreen(false, payload);
-    });
-
-    setTimeout(function () {
-      showThankYouScreen(true);
-    }, 2500);
   };
 }
 
