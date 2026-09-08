@@ -14,13 +14,13 @@
     user-select: none;
   }
   #app { width: 100%; height: 100%; display: flex; align-items: center; justify-content: center; }
-  
-  .screen { 
-    width: 760px; 
-    max-width: 90vw; 
-    padding: 32px; 
-    text-align: left; 
-    line-height: 1.8; 
+
+  .screen {
+    width: 760px;
+    max-width: 90vw;
+    padding: 32px;
+    text-align: left;
+    line-height: 1.8;
     box-sizing: border-box;
   }
   .screen h1 { font-size: 22px; margin-bottom: 16px; border-bottom: 2px solid #555; padding-bottom: 8px; }
@@ -33,7 +33,7 @@
   }
   button:hover { background: #1f63c4; }
   #fixation { font-size: 48px; }
-  
+
   #taskContainer {
     width: 760px;
     max-width: 90vw;
@@ -88,15 +88,15 @@ const GOOGLE_SHEET_ENDPOINT = "https://script.google.com/macros/s/AKfycbzqzpoesA
    実験パラメータ設定
    ============================================================== */
 const PARAMS = {
-  HUE_DEG: 28.0,            
+  HUE_DEG: 28.0,
   // 実験①：36から72まで完全に6.0刻みの等間隔
-  L_LEVELS: [36, 42, 48, 54, 60, 66, 72], 
+  L_LEVELS: [36, 42, 48, 54, 60, 66, 72],
 
   TARGET_COUNT: 7,
-  GRID_SIZE: 5,             
-  BACKGROUND_L: 50,         
+  GRID_SIZE: 5,
+  BACKGROUND_L: 50,
 
-  PRACTICE_TRIALS: 2,       
+  PRACTICE_TRIALS: 2,
   REPS_PER_COLOR_SET: 5,    // 3条件 × 5回 = 各ブロック15試行（計30試行）
   TIME_LIMIT_SEC: 5.0,
 
@@ -145,6 +145,54 @@ function findMaxChroma(L, hDeg) {
   }
   return lo;
 }
+function lchToLab(L, C, hDeg) {
+  const hRad = hDeg * Math.PI / 180;
+  return { L, a: C * Math.cos(hRad), b: C * Math.sin(hRad) };
+}
+
+/* ==============================================================
+   CIEDE2000（知覚的な色差ΔE00の計算。参加者には見せず、
+   パレット設計の検証用にコンソールへ出力する）
+   ============================================================== */
+function deltaE2000(lab1, lab2) {
+  const { L: L1, a: a1, b: b1 } = lab1;
+  const { L: L2, a: a2, b: b2 } = lab2;
+  const C1 = Math.hypot(a1, b1), C2 = Math.hypot(a2, b2);
+  const avgC = (C1 + C2) / 2;
+  const G = 0.5 * (1 - Math.sqrt(Math.pow(avgC, 7) / (Math.pow(avgC, 7) + Math.pow(25, 7))));
+  const a1p = a1 * (1 + G), a2p = a2 * (1 + G);
+  const C1p = Math.hypot(a1p, b1), C2p = Math.hypot(a2p, b2);
+  const avgCp = (C1p + C2p) / 2;
+  const norm = d => (d + 360) % 360;
+  const h1p = norm(Math.atan2(b1, a1p) * 180 / Math.PI);
+  const h2p = norm(Math.atan2(b2, a2p) * 180 / Math.PI);
+  let dhp = 0;
+  if (C1p * C2p !== 0) {
+    dhp = h2p - h1p;
+    if (dhp > 180) dhp -= 360; else if (dhp < -180) dhp += 360;
+  }
+  const dLp = L2 - L1, dCp = C2p - C1p;
+  const dHp = 2 * Math.sqrt(C1p * C2p) * Math.sin((dhp * Math.PI / 180) / 2);
+  const avgLp = (L1 + L2) / 2;
+  let avghp = h1p + h2p;
+  if (C1p * C2p !== 0) {
+    avghp = (h1p + h2p) / 2;
+    if (Math.abs(h1p - h2p) > 180) avghp += (h1p + h2p < 360) ? 180 : -180;
+  }
+  const d2r = Math.PI / 180;
+  const T = 1 - 0.17 * Math.cos((avghp - 30) * d2r) + 0.24 * Math.cos((2 * avghp) * d2r)
+            + 0.32 * Math.cos((3 * avghp + 6) * d2r) - 0.2 * Math.cos((4 * avghp - 63) * d2r);
+  const dTheta = 30 * Math.exp(-Math.pow((avghp - 275) / 25, 2));
+  const Rc = 2 * Math.sqrt(Math.pow(avgCp, 7) / (Math.pow(avgCp, 7) + Math.pow(25, 7)));
+  const Sl = 1 + (0.015 * Math.pow(avgLp - 50, 2)) / Math.sqrt(20 + Math.pow(avgLp - 50, 2));
+  const Sc = 1 + 0.045 * avgCp;
+  const Sh = 1 + 0.015 * avgCp * T;
+  const Rt = -Math.sin(2 * dTheta * d2r) * Rc;
+  return Math.sqrt(
+    Math.pow(dLp / Sl, 2) + Math.pow(dCp / Sc, 2) + Math.pow(dHp / Sh, 2)
+    + Rt * (dCp / Sc) * (dHp / Sh)
+  );
+}
 
 // 1. 実験①：明度変化パレット（H固定、Lが6刻みで変化）
 function buildExp1Palette() {
@@ -153,7 +201,7 @@ function buildExp1Palette() {
   return PARAMS.L_LEVELS.map((L, level) => {
     let rgb = lchToSrgb(L, fixedC, PARAMS.HUE_DEG);
     if (!rgb) rgb = lchToSrgb(L, Math.max(0, fixedC - 0.5), PARAMS.HUE_DEG);
-    return { level: level, hex: rgbToHex(rgb) };
+    return { level, L, C: fixedC, h: PARAMS.HUE_DEG, hex: rgbToHex(rgb) };
   });
 }
 
@@ -162,18 +210,33 @@ function buildExp2Palette(hAngles) {
   const fixedL = 58.0;
   const maxChromas = hAngles.map(h => findMaxChroma(fixedL, h));
   const fixedC = Math.min(...maxChromas);
-
   return hAngles.map((h, level) => {
     let rgb = lchToSrgb(fixedL, fixedC, h);
     if (!rgb) rgb = lchToSrgb(fixedL, Math.max(0, fixedC - 0.5), h);
-    return { level: level, hex: rgbToHex(rgb) };
+    return { level, L: fixedL, C: fixedC, h, hex: rgbToHex(rgb) };
   });
 }
 
-// パレット生成（重複宣言を解消）
 const EXP1_PALETTE = buildExp1Palette();
-const EXP2_NARROW_PALETTE = buildExp2Palette([28, 40, 52, 64, 76, 88, 100]);
-const EXP2_WIDE_PALETTE = buildExp2Palette([28, 52, 76, 100, 124, 148, 172]);
+// ΔE00で隣接ステップを均等化した色相角（narrow: 隣接ΔE00≈7.0固定 / wide: 隣接ΔE00≈11.5固定）
+// 彩度Cは各セットごとに自動計算されるが、narrow≈62.8・wide≈62.6とほぼ一致するため実質共通
+const EXP2_NARROW_PALETTE = buildExp2Palette([28.0, 38.9, 49.3, 59.4, 69.4, 79.3, 89.2]);
+const EXP2_WIDE_PALETTE = buildExp2Palette([28.0, 45.9, 62.8, 79.3, 96.0, 114.4, 136.2]);
+
+// ★パレット設計の検証：隣接するレベル間のΔE2000をコンソールに出力
+// （参加者には見せない。ブラウザの開発者ツール(F12)のConsoleで確認できる）
+function reportPaletteDeltaE(name, palette) {
+  const des = [];
+  for (let i = 0; i < palette.length - 1; i++) {
+    const lab1 = lchToLab(palette[i].L, palette[i].C, palette[i].h);
+    const lab2 = lchToLab(palette[i + 1].L, palette[i + 1].C, palette[i + 1].h);
+    des.push(Math.round(deltaE2000(lab1, lab2) * 10) / 10);
+  }
+  console.log(`[パレット検証] ${name}: 隣接ΔE00 = [${des.join(", ")}]`);
+}
+reportPaletteDeltaE("実験①(明度)", EXP1_PALETTE);
+reportPaletteDeltaE("実験②narrow(色相12°刻み)", EXP2_NARROW_PALETTE);
+reportPaletteDeltaE("実験②wide(色相24°刻み)", EXP2_WIDE_PALETTE);
 
 function backgroundHex(L) { return rgbToHex(lchToSrgb(L, 0, 0)); }
 function distractorHex(bgL) {
@@ -191,11 +254,8 @@ let participantId = "";
 let screeningData = {};
 
 function getNextParticipantId() {
-  const STORAGE_KEY = "color_exp_participant_counter";
-  let count = parseInt(localStorage.getItem(STORAGE_KEY) || "0", 10);
-  count += 1;
-  localStorage.setItem(STORAGE_KEY, count);
-  return `P${String(count).padStart(3, "0")}`;
+  const rand = Math.random().toString(36).slice(2, 6).toUpperCase();
+  return "P" + Date.now().toString(36).toUpperCase() + rand;
 }
 
 function shuffle(arr) {
@@ -208,12 +268,9 @@ function shuffle(arr) {
 
 function buildFullPlan() {
   const plan = [];
-
-  // 練習2試行
   plan.push({ isPractice: true, colorCondition: "exp1_lightness", timeLimitOn: true });
   plan.push({ isPractice: true, colorCondition: "exp1_lightness", timeLimitOn: false });
 
-  // 本番ブロック1（制限時間あり：15試行）
   let block1 = [];
   for (let i = 0; i < PARAMS.REPS_PER_COLOR_SET; i++) {
     block1.push({ isPractice: false, colorCondition: "exp1_lightness", timeLimitOn: true });
@@ -222,7 +279,6 @@ function buildFullPlan() {
   }
   plan.push(...shuffle(block1));
 
-  // 本番ブロック2（制限時間なし：15試行）
   let block2 = [];
   for (let i = 0; i < PARAMS.REPS_PER_COLOR_SET; i++) {
     block2.push({ isPractice: false, colorCondition: "exp1_lightness", timeLimitOn: false });
@@ -245,7 +301,7 @@ function showConsentScreen() {
       <div id="consentBox">
         <p><b>【本予備実験の目的】</b><br>
         画面上の多段階色彩配置と人間の行動系列生成プロセスの関係を調べる本実験に向けた予備実験です。実験環境が正常に稼働するか、タスクの難易度や手順に不自然な点がないかを検証し、本実験のデザインを洗練させることを目的としています。</p>
-        
+
         <p><b>【所要時間】</b> 約 8 〜 10 分</p>
 
         <p><b>【参加必須環境】</b></p>
@@ -255,8 +311,8 @@ function showConsentScreen() {
           <li>可能であればブラウザを最大化/全画面表示にしてください。</li>
         </ul>
 
-        <p><b>【データの取り扱い】</b><br>取得されたデータは研究および学術的な統計分析のみに使用され、個人が特定されることはありません。</p>
-        
+        <p><b>【データの取り扱い】</b><br>取得されたデータは研究および学術的な統計分析のみに使用され、個人が特定されることはありません。実験中の操作（クリックした順番や反応時間など）を記録します。</p>
+
         <p><b>【実験実施者・連絡先】</b><br>
         実施責任者：早稲田大学人間科学部 松居研究室 羽賀琴美<br>
         連絡先：toiro5103@akane.waseda.jp</p>
@@ -351,7 +407,7 @@ function showInstructions() {
     <div class="screen">
       <h1>課題の説明</h1>
       <p>画面中央に5×5のマス目が表示され、そのうち <b>${PARAMS.TARGET_COUNT}個</b> に色のついたマスが表示されます。</p>
-      
+
       <div style="background:rgba(43,125,233,0.15); border-left:4px solid #2b7de9; padding:12px 16px; margin:16px 0; border-radius:4px;">
         <p style="margin:0; font-weight:bold; color:#88bbff;">【重要：操作ルール】</p>
         <p style="margin:4px 0 0 0;">
@@ -359,14 +415,14 @@ function showInstructions() {
           途中でやめず、表示されたすべてのカラーマスをクリックしてください。クリックしたマスは背景色と同じグレーに変わります。
         </p>
       </div>
-      
+
       <h2>試行の流れ</h2>
       <ol>
         <li><b>練習試行（2回）</b>：操作確認のための練習（時間制限あり1回、なし1回）</li>
-        <li><b>本番ブロック1（15試行）</b>：<b>【制限時間あり（5秒）】</b><br>画面上部に赤いタイマーバーが表示されます。時間内に直感で素早く選んでください。</li>
-        <li><b>本番ブロック2（15試行）</b>：<b>【制限時間なし】</b><br>時間制限はありません。ご自身のペースで判断して選んでください。</li>
+        <li><b>本番1（15試行）</b>：<b>【制限時間あり（5秒）】</b><br>画面上部に赤いタイマーバーが表示されます。時間内に直感で素早く選んでください。</li>
+        <li><b>本番2（15試行）</b>：<b>【制限時間なし】</b><br>時間制限はありません。直感で選んでください。</li>
       </ol>
-      <p style="font-size:13px; color:#ccc;">※試行ごとに色の組み合わせ（赤の明淡、色相の変化など）が変化します。</p>
+      <p style="font-size:13px; color:#ccc;">※試行ごとに色の組み合わせが変化します。</p>
       <button id="startPracticeBtn">まずは練習（2回）を開始する</button>
     </div>`;
 
@@ -380,13 +436,13 @@ function showInstructions() {
 function runNextTrial() {
   timerBar.style.width = "0%";
   if (currentTrialIndex >= trialPlan.length) { return showEnd(); }
-  
+
   const cond = trialPlan[currentTrialIndex];
   const isPractice = cond.isPractice;
   const label = isPractice ? `【練習】` : `【本番】`;
 
   progressEl.textContent = `${label} 試行 ${currentTrialIndex + 1} / ${trialPlan.length}`;
-  
+
   const bgL = PARAMS.BACKGROUND_L;
   document.body.style.background = backgroundHex(bgL);
 
@@ -418,7 +474,7 @@ function runTrial(cond, bgL) {
   const dGray = distractorHex(bgL);
 
   const bannerClass = cond.timeLimitOn ? "banner-timelimit" : "banner-notimelimit";
-  const bannerText = cond.timeLimitOn ? "⏱ 制限時間あり（残り 5 秒）" : "⏱ 制限時間なし（ご自身のペースで）";
+  const bannerText = cond.timeLimitOn ? "制限時間あり" : "制限時間なし";
   const practiceNotice = cond.isPractice ? "<span style='font-size:13px; opacity:0.8; margin-left:8px;'>[練習]</span>" : "";
 
   app.innerHTML = `
@@ -478,8 +534,6 @@ function runTrial(cond, bgL) {
       });
     }
 
-    // ブレイク画面の分岐処理
-    // 1. 練習終了時（試行インデックス = 1） -> 本番1（制限時間あり）へ
     if (currentTrialIndex === PARAMS.PRACTICE_TRIALS - 1) {
       setTimeout(() => {
         document.body.style.background = "#444";
@@ -489,10 +543,10 @@ function runTrial(cond, bgL) {
             <h1>練習が終了しました</h1>
             <p>ここから本番が始まります。</p>
             <div style="background:rgba(255,85,85,0.15); border-left:4px solid #ff5555; padding:12px 16px; margin:20px 0; border-radius:4px;">
-              <h2 style="margin:0 0 6px 0; color:#ff8888; font-size:17px;">【本番ブロック1：制限時間あり（15試行）】</h2>
+              <h2 style="margin:0 0 6px 0; color:#ff8888; font-size:17px;">【本番1：制限時間あり（15試行）】</h2>
               <p style="margin:0;">画面上部に赤いタイマーバーが表示されます。<br>重要だと感じる順に、<b>時間内に7個すべて</b>選ぶように素早くクリックしてください。</p>
             </div>
-            <button id="goBlock1Btn">本番ブロック1を開始する</button>
+            <button id="goBlock1Btn">本番1を開始する</button>
           </div>`;
         document.getElementById("goBlock1Btn").onclick = () => {
           currentTrialIndex++;
@@ -502,7 +556,6 @@ function runTrial(cond, bgL) {
       return;
     }
 
-    // 2. 本番ブロック1終了時（試行インデックス = 16） -> 本番2（制限時間なし）へ
     const block1EndIndex = PARAMS.PRACTICE_TRIALS + (PARAMS.REPS_PER_COLOR_SET * 3) - 1;
     if (currentTrialIndex === block1EndIndex) {
       setTimeout(() => {
@@ -512,10 +565,10 @@ function runTrial(cond, bgL) {
           <div class="screen">
             <h1>本番ブロック1が終了しました</h1>
             <div style="background:rgba(43,125,233,0.15); border-left:4px solid #2b7de9; padding:12px 16px; margin:20px 0; border-radius:4px;">
-              <h2 style="margin:0 0 6px 0; color:#88bbff; font-size:17px;">【本番ブロック2：制限時間なし（15試行）】</h2>
-              <p style="margin:0;">ここからは時間制限がありません。ご自身のペースで、重要だと感じる順に<b>7個すべて</b>選んでください。</p>
+              <h2 style="margin:0 0 6px 0; color:#88bbff; font-size:17px;">【本番2：制限時間なし（15試行）】</h2>
+              <p style="margin:0;">ここからは時間制限がありません。重要だと感じる順に<b>7個すべて</b>選んでください。</p>
             </div>
-            <button id="goBlock2Btn">本番ブロック2を開始する</button>
+            <button id="goBlock2Btn">本番2を開始する</button>
           </div>`;
         document.getElementById("goBlock2Btn").onclick = () => {
           currentTrialIndex++;
@@ -619,10 +672,7 @@ function showQuestionnaire() {
         user_agent: navigator.userAgent
       };
 
-      var payload = {
-        trials: results,
-        survey: surveyData
-      };
+      var payload = { trials: results, survey: surveyData };
 
       var form = document.createElement("form");
       form.method = "POST";
@@ -648,36 +698,33 @@ function showQuestionnaire() {
       form.submit();
 
       setTimeout(function () {
-        showThankYouScreen(true);
+        showThankYouScreen();
       }, 1500);
 
     } catch (err) {
       alert("送信エラー:\n" + err.name + ": " + err.message);
+      showThankYouScreen();
     }
   };
 }
 
-function showThankYouScreen(isSuccess, fallbackPayload = null) {
-  if (isSuccess) {
-    app.innerHTML = `
-      <div class="screen" style="text-align:center;">
-        <h1 style="border:none;">実験終了</h1>
-        <p style="font-size:16px; margin:24px 0;">データは正常に送信・記録されました。<br>ご協力ありがとうございました！</p>
-        <p style="color:#aaa; font-size:13px;">この画面は閉じていただいて構いません。</p>
-      </div>`;
-  } else {
-    const csvLines = ["participant,trial_num,color_condition,time_limit_condition,click_order,grid_x,grid_y,color_level,hex_code,rt_ms,distance_px,timed_out"];
-    results.forEach(r => csvLines.push(Object.values(r).join(",")));
-    const csvBlob = new Blob([csvLines.join("\n")], { type: "text/csv" });
-    const csvUrl = URL.createObjectURL(csvBlob);
+// ★送信の成否はhidden iframeでは確認できないため、常にバックアップDLを提示する
+function showThankYouScreen() {
+  const csvLines = ["participant,trial_num,color_condition,time_limit_condition,click_order,grid_x,grid_y,color_level,hex_code,rt_ms,distance_px,timed_out"];
+  results.forEach(r => csvLines.push(Object.values(r).join(",")));
+  const csvBlob = new Blob([csvLines.join("\n")], { type: "text/csv" });
+  const csvUrl = URL.createObjectURL(csvBlob);
 
-    app.innerHTML = `
-      <div class="screen">
-        <h1 style="color:#ff5555;">自動送信に失敗しました</h1>
-        <p>以下のボタンからデータをダウンロードして担当者へお送りください。</p>
-        <a href="${csvUrl}" download="backup_${participantId}.csv"><button>バックアップデータをダウンロード</button></a>
-      </div>`;
-  }
+  app.innerHTML = `
+    <div class="screen" style="text-align:center;">
+      <h1 style="border:none;">実験終了</h1>
+      <p style="font-size:16px; margin:24px 0;">ご協力ありがとうございました！</p>
+      <p style="color:#aaa; font-size:12px;">
+        （送信の確認が取れないため、念のためのバックアップです。<br>
+        可能であれば下のボタンからもダウンロードして担当者にお送りください）
+      </p>
+      <a href="${csvUrl}" download="backup_${participantId}.csv"><button>バックアップをダウンロード</button></a>
+    </div>`;
 }
 
 showConsentScreen();
